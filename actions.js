@@ -140,6 +140,22 @@ export function getActions(self) {
 			},
 		},
 
+		powerOn: {
+			name: 'Power ON (runs configured macro)',
+			options: [],
+			callback: () => {
+				self.sendCommand(`RUNMACRO ${self.config.powerOnMacro || 'PowerOn'}`)
+			},
+		},
+
+		standby: {
+			name: 'Standby (runs configured macro)',
+			options: [],
+			callback: () => {
+				self.sendCommand(`RUNMACRO ${self.config.standbyMacro || 'Standby'}`)
+			},
+		},
+
 		customCommand: {
 			name: 'Send Custom Command',
 			options: [

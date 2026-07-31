@@ -153,5 +153,53 @@ export function getPresets(self) {
 		],
 	}
 
+	presets['powerOn'] = {
+		type: 'button',
+		category: 'Power',
+		name: 'Power ON',
+		style: {
+			text: 'AP20\nON',
+			size: '18',
+			color: combineRgb(255, 255, 255),
+			bgcolor: combineRgb(0, 0, 0),
+		},
+		steps: [
+			{
+				down: [{ actionId: 'powerOn', options: {} }],
+				up: [],
+			},
+		],
+		feedbacks: [
+			{
+				feedbackId: 'powerFault',
+				options: {},
+				style: {
+					bgcolor: combineRgb(255, 102, 0),
+					color: combineRgb(0, 0, 0),
+					text: 'PWR\nFAULT',
+				},
+			},
+		],
+	}
+
+	presets['standby'] = {
+		type: 'button',
+		category: 'Power',
+		name: 'Standby',
+		style: {
+			text: 'AP20\nSTBY',
+			size: '18',
+			color: combineRgb(255, 255, 255),
+			bgcolor: combineRgb(0, 0, 0),
+		},
+		steps: [
+			{
+				down: [{ actionId: 'standby', options: {} }],
+				up: [],
+			},
+		],
+		feedbacks: [],
+	}
+
 	return presets
 }

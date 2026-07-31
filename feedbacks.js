@@ -42,6 +42,17 @@ export function getFeedbacks(self) {
 			callback: (feedback) => self.state.format === feedback.options.format,
 		},
 
+		powerFault: {
+			type: 'boolean',
+			name: 'Power supply fault (H336 voltages out of limits)',
+			defaultStyle: {
+				bgcolor: combineRgb(255, 102, 0),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [],
+			callback: () => self.state.powerOk === false,
+		},
+
 		faderLevel: {
 			type: 'boolean',
 			name: 'Fader level comparison',

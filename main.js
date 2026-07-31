@@ -24,6 +24,8 @@ class DatasatAP20Instance extends InstanceBase {
 			monitorMute: 0,
 			version: '',
 			serial: '',
+			temps: { t1: null, t2: null, t3: null },
+			powerOk: true,
 		}
 	}
 
@@ -68,6 +70,20 @@ class DatasatAP20Instance extends InstanceBase {
 				label: 'NetCmd / Setup Password (leave empty if none)',
 				width: 8,
 				default: '',
+			},
+			{
+				type: 'textinput',
+				id: 'powerOnMacro',
+				label: 'Power ON macro name (as defined on the device)',
+				width: 6,
+				default: 'PowerOn',
+			},
+			{
+				type: 'textinput',
+				id: 'standbyMacro',
+				label: 'Standby macro name (as defined on the device)',
+				width: 6,
+				default: 'Standby',
 			},
 			{
 				type: 'number',
@@ -153,6 +169,8 @@ class DatasatAP20Instance extends InstanceBase {
 		this.sendCommand('FORMAT')
 		this.sendCommand('MONITORLEVEL')
 		this.sendCommand('MONITORMUTE')
+		this.sendCommand('HEALTH TEMPERATURE')
+		this.sendCommand('HEALTH H336VOLTS')
 	}
 
 	/**
@@ -252,6 +270,29 @@ class DatasatAP20Instance extends InstanceBase {
 					this.state.monitorMute = m
 					this.setVariableValues({ monitor_mute: m ? 'Muted' : 'Unmuted' })
 					this.checkFeedbacks('monitorMute')
+				}
+				break
+			}
+
+			case 'HEALTH': {
+				// value is e.g. "TEMPERATURE 34,29,25" or "H336VOLTS 1,3.39,5.10,15.0,-14.4,0.0,1"
+				const subIdx = value.indexOf(' ')
+				if (subIdx < 0) break
+				const subCmd = value.slice(0, subIdx)
+				const subVal = value.slice(subIdx + 1).trim()
+
+				if (subCmd === 'TEMPERATURE') {
+					const [t1, t2, t3] = subVal.split(',')
+					this.state.temps = { t1, t2, t3 }
+					this.setVariableValues({ temp1: t1, temp2: t2, temp3: t3 })
+				} else if (subCmd === 'H336VOLTS') {
+					// First field is <vok>: 1 = all voltages within limits, 0 = fault, NA = board absent
+					if (subVal !== 'NA') {
+						const vok = subVal.split(',')[0]
+						this.state.powerOk = vok === '1'
+						this.setVariableValues({ power: this.state.powerOk ? 'OK' : 'FAULT' })
+						this.checkFeedbacks('powerFault')
+					}
 				}
 				break
 			}

@@ -6,6 +6,10 @@ export function getVariables() {
 		{ variableId: 'format', name: 'Current format name' },
 		{ variableId: 'monitor_level', name: 'Monitor level (0 - 100)' },
 		{ variableId: 'monitor_mute', name: 'Monitor mute state' },
+		{ variableId: 'temp1', name: 'Temperature H331 board (°C)' },
+		{ variableId: 'temp2', name: 'Temperature H332 board (°C)' },
+		{ variableId: 'temp3', name: 'Temperature H335 board (°C)' },
+		{ variableId: 'power', name: 'Power supply status (OK/FAULT)' },
 		{ variableId: 'version', name: 'Device software version' },
 		{ variableId: 'serial', name: 'Device serial number' },
 	]

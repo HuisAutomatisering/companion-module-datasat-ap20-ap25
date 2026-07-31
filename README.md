@@ -10,6 +10,8 @@ Implements the Datasat Remote Command API (document TN-H413 rev D).
 - Format selection with feedback
 - Macro execution
 - Monitor level and monitor mute
+- Power ON / Standby via configurable macro names
+- Board temperatures and power-supply health monitoring
 - Password authentication (NetCmd / Setup)
 - Status polling so buttons stay in sync with changes made on the device
 - Presets for common buttons (mute toggle, volume up/down, reference level 7.0)

@@ -17,6 +17,7 @@ This module controls the Datasat AP20 and AP25 cinema audio processors over Ethe
 - Run Macro (name must match the macro name on the device exactly)
 - Set Monitor Level (0 - 100)
 - Monitor Mute (mute / unmute / toggle)
+- Power ON / Standby (run the macro names set in the module config)
 - Send Custom Command (any command from the API doc, without the leading `@`)
 
 ## Feedbacks
@@ -25,10 +26,11 @@ This module controls the Datasat AP20 and AP25 cinema audio processors over Ethe
 - Monitor muted
 - Current format matches a given name
 - Fader level comparison (=, >, <)
+- Power supply fault (H336 voltage check)
 
 ## Variables
 
-`fader`, `fader_raw`, `muted`, `format`, `monitor_level`, `monitor_mute`, `version`, `serial`
+`fader`, `fader_raw`, `muted`, `format`, `monitor_level`, `monitor_mute`, `temp1`, `temp2`, `temp3`, `power`, `version`, `serial`
 
 ## Notes
 

@@ -3,7 +3,7 @@
 	"name": "datasat-ap2x",
 	"shortname": "ap2x",
 	"description": "Control the Datasat AP20 and AP25 audio processors over TCP (port 14500)",
-	"version": "1.0.0",
+	"version": "2.0.0",
 	"license": "MIT",
 	"repository": "https://github.com/HuisAutomatisering/companion-module-datasat-ap20-ap25.git",
 	"bugs": "https://github.com/HuisAutomatisering/companion-module-datasat-ap20-ap25/issues",
@@ -15,7 +15,7 @@
 	"runtime": {
 		"type": "node22",
 		"api": "nodejs-ipc",
-		"apiVersion": "1.11.3",
+		"apiVersion": "1.12.1",
 		"entrypoint": "../main.js"
 	},
 	"manufacturer": "Datasat",
