@@ -1,0 +1,13 @@
+name: Companion Module Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  module-checks:
+    name: Build and validate module
+    uses: bitfocus/actions/.github/workflows/module-checks.yaml@main
+    with:
+      upload-artifact: true

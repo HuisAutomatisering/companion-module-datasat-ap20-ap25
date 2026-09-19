@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an action, feedback, variable or preset
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: What would you like the module to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: api-reference
+    attributes:
+      label: Relevant API command
+      description: >-
+        If you know the matching command from the Datasat Remote Command API
+        (document TN-H413), please add it here.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Use case, workaround you use today, screenshots.

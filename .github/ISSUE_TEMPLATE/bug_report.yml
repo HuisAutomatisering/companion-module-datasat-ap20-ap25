@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in the module does not work as expected
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue.
+        Please fill in as much detail as you can — it makes fixing things a lot faster.
+
+  - type: input
+    id: module-version
+    attributes:
+      label: Module version
+      placeholder: '2.0.0'
+    validations:
+      required: true
+
+  - type: input
+    id: companion-version
+    attributes:
+      label: Companion version
+      placeholder: '3.5.x'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options:
+        - Datasat AP20
+        - Datasat AP25
+        - Other / unknown
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Device firmware version
+      placeholder: 'See System > About on the device'
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem, what you expected instead, and how to reproduce it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Companion log output
+      description: Copy the connection log lines here. They are automatically formatted as code.
+      render: shell
