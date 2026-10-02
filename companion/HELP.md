@@ -12,7 +12,7 @@ This module controls the Datasat AP20 and AP25 cinema audio processors over Ethe
 
 ## What the module detects
 
-On connect the module asks the unit which of the extra commands it understands. A unit answers `BadCommand` to anything it does not know.
+On connect the module asks the unit which of the extra commands it understands. A unit answers `BadCommand` to anything it does not know. Only that answer counts as "not supported": if the unit does not answer in time (for example while it is starting up) the module asks again later.
 
 - `@POWER` available: Power ON / Standby / Toggle switch the unit directly and the power state is shown.
 - `@FORMATNAMES` / `@MACRONAMES` available: the Select Format and Run Macro actions become dropdowns filled with the names on the unit, and a preset button is created for every format and macro.

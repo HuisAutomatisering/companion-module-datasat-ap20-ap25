@@ -5,6 +5,20 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3]
+
+### Fixed
+
+- When the unit did not answer `@POWER` in time while connecting (for example while it was starting up or
+  just after a power change), the module decided for good that the unit does not support `@POWER`. The
+  Power buttons then reported "does not support @POWER" and the power state disappeared until the module
+  was reloaded. Only an explicit `BadCommand` answer now means "not supported". Without an answer the
+  module keeps asking while polling, and Power ON / Standby / Toggle send `@POWER` meanwhile.
+- The same applies to the format and macro lists: they are only written off after a `BadCommand` answer,
+  otherwise they are requested again later.
+- An answer that arrives after its timeout is no longer taken for the answer to the next command. This
+  could mix up the format and macro lists.
+
 ## [2.1.2]
 
 ### Changed

@@ -7,9 +7,10 @@ import { UpgradeScripts } from './upgrades.js'
 import {
 	BOARDS,
 	commandKeyword,
+	classifyListResponse,
+	isAnswerTo,
 	isBadCommand,
 	isListCommand,
-	isValidListResponse,
 	parseBinary,
 	parseHealth,
 	parseNameList,
@@ -61,7 +62,8 @@ class DatasatAP20Instance extends InstanceBase {
 		this.warmupTimer = null
 
 		// What this particular unit understands (detected after connecting).
-		this.caps = { power: false, formatNames: false, macroNames: false }
+		// power: true = works, false = the unit said BadCommand, null = not known yet (no usable answer so far).
+		this.caps = { power: null, formatNames: false, macroNames: false }
 		this.formats = []
 		this.macros = []
 
@@ -225,7 +227,7 @@ class DatasatAP20Instance extends InstanceBase {
 	}
 
 	resetDeviceKnowledge() {
-		this.caps = { power: false, formatNames: false, macroNames: false }
+		this.caps = { power: null, formatNames: false, macroNames: false }
 		this.formats = []
 		this.macros = []
 		this.namesLoaded = false
@@ -280,10 +282,13 @@ class DatasatAP20Instance extends InstanceBase {
 		if (!alive()) return
 
 		// @POWER is not in TN-H413 rev D but is accepted by real AP20/AP25 units.
+		// Only a BadCommand answer means "not supported". No answer (for example while the unit is
+		// starting up) leaves it open, and polling keeps asking until the unit answers.
 		const power = await this.request('POWER')
 		if (!alive()) return
-		this.caps.power = power !== null && /^POWER\s+[01]$/i.test(power.text)
-		this.log('debug', `Capability @POWER: ${this.caps.power ? 'supported' : 'not supported'}`)
+		this.evaluatePower(power)
+		const powerState = { true: 'supported', false: 'not supported' }[this.caps.power] ?? 'not known yet'
+		this.log('debug', `Capability @POWER: ${powerState}${power ? ` (answer: ${power.text})` : ' (no answer)'}`)
 
 		if (this.canProbeNames()) {
 			await this.loadNames(session)
@@ -300,7 +305,7 @@ class DatasatAP20Instance extends InstanceBase {
 
 	/** Format/macro lists can only be read reliably while the unit is operating. */
 	canProbeNames() {
-		return !this.caps.power || (this.state.power === 1 && !this.isWarmingUp())
+		return this.caps.power === false || (this.state.power === 1 && !this.isWarmingUp())
 	}
 
 	/**
@@ -323,10 +328,17 @@ class DatasatAP20Instance extends InstanceBase {
 		const macros = await this.request('MACRONAMES')
 		if (session !== this.session) return false
 
-		this.caps.formatNames = isValidListResponse(formats)
-		this.caps.macroNames = isValidListResponse(macros)
-		this.formats = this.caps.formatNames ? parseNameList(stripListPrefix('FORMATNAMES', formats.text)) : []
-		this.macros = this.caps.macroNames ? parseNameList(stripListPrefix('MACRONAMES', macros.text)) : []
+		// 'unknown' (no answer, or an answer that does not fit) keeps what we had and is tried again later
+		const formatsKind = classifyListResponse(formats, 'FORMATNAMES')
+		const macrosKind = classifyListResponse(macros, 'MACRONAMES')
+		if (formatsKind !== 'unknown') {
+			this.caps.formatNames = formatsKind === 'list'
+			this.formats = this.caps.formatNames ? parseNameList(stripListPrefix('FORMATNAMES', formats.text)) : []
+		}
+		if (macrosKind !== 'unknown') {
+			this.caps.macroNames = macrosKind === 'list'
+			this.macros = this.caps.macroNames ? parseNameList(stripListPrefix('MACRONAMES', macros.text)) : []
+		}
 		this.refreshDefinitions()
 
 		const yesNo = (flag) => (flag ? 'yes' : 'no')
@@ -338,7 +350,7 @@ class DatasatAP20Instance extends InstanceBase {
 			this.log('info', `Loaded ${this.formats.length} formats and ${this.macros.length} macros from the unit`)
 		}
 
-		const complete = formats !== null && macros !== null
+		const complete = formatsKind !== 'unknown' && macrosKind !== 'unknown'
 		this.namesLoaded = complete
 		if (!complete) this.scheduleNamesRetry(session)
 		return complete
@@ -405,10 +417,11 @@ class DatasatAP20Instance extends InstanceBase {
 	async pollOnce() {
 		const session = this.session
 
-		if (this.caps.power) {
+		if (this.caps.power !== false) {
 			const res = await this.request('POWER')
 			if (res === null || session !== this.session) return
-			if (this.state.power !== 1 || this.isWarmingUp()) return
+			this.evaluatePower(res)
+			if (this.caps.power && (this.state.power !== 1 || this.isWarmingUp())) return
 		}
 
 		for (const cmd of STATUS_POLL) {
@@ -423,6 +436,16 @@ class DatasatAP20Instance extends InstanceBase {
 				const res = await this.request(cmd)
 				if (res === null || session !== this.session) return
 			}
+		}
+	}
+
+	/** Read what an answer to @POWER says about support. The power state itself is handled in parseResponse. */
+	evaluatePower(res) {
+		if (res === null) return
+		if (isBadCommand(res)) {
+			this.caps.power = false
+		} else if (/^POWER\s+[01]$/i.test(res.text)) {
+			this.caps.power = true
 		}
 	}
 
@@ -505,6 +528,7 @@ class DatasatAP20Instance extends InstanceBase {
 				return
 			}
 			if (isBadCommand(res)) {
+				if (commandKeyword(cmd) === 'POWER') this.caps.power = false
 				this.log('warn', `The unit does not support @${commandKeyword(cmd)} (BadCommand)`)
 			} else if (logResponse) {
 				this.log('info', `Response to @${cmd}: ${res.text.replace(/\n/g, ' | ') || '(empty)'}`)
@@ -538,11 +562,17 @@ class DatasatAP20Instance extends InstanceBase {
 			this.log('debug', `RX: ${text.replace(/\n/g, ' | ') || '(empty)'}`)
 
 			const cmd = this.inflight ? this.inflight.cmd : null
-			// Name lists carry no command echo: they are handed to the code that asked for them.
-			if (!(cmd && isListCommand(cmd))) {
-				for (const line of lines) this.parseResponse(line, cmd)
+			// An answer that arrives after its timeout must not be taken for the answer to the next command
+			const belongs = cmd === null || isAnswerTo(cmd, text)
+			// Name lists are handed to the code that asked for them.
+			if (!(cmd && belongs && isListCommand(cmd))) {
+				for (const line of lines) this.parseResponse(line, belongs ? cmd : null)
 			}
-			this.finishInflight({ text, lines })
+			if (belongs) {
+				this.finishInflight({ text, lines })
+			} else {
+				this.log('debug', `Late answer, still waiting for the answer to @${commandKeyword(cmd)}`)
+			}
 		}
 	}
 
@@ -699,7 +729,8 @@ class DatasatAP20Instance extends InstanceBase {
 	 * otherwise the optional fallback macros from the module config.
 	 */
 	setPower(on) {
-		if (this.caps.power) {
+		// Try @POWER unless the unit has said it does not know it
+		if (this.caps.power !== false) {
 			if (on) this.beginWarmup()
 			else this.cancelWarmup()
 			this.sendCommand(`POWER ${on ? 1 : 0}`)

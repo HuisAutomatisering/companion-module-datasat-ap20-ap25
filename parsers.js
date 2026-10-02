@@ -10,7 +10,7 @@ export const BOARDS = ['H331', 'H332', 'H335', 'H336', 'H338']
 const LIST_COMMANDS = new Set(['FORMATNAMES', 'MACRONAMES'])
 
 /** Keywords that identify an ordinary, echoed status line (never a name list). */
-const STATUS_LINE = /^(FADER|MUTED|MONITORLEVEL|MONITORMUTE|POWER|HEALTH|AUTH|SERIALNO)\s/
+const STATUS_LINE = /^(FADER|MUTED|MONITORLEVEL|MONITORMUTE|POWER|FORMAT|HEALTH|AUTH|SERIALNO|VER)\s/
 
 export function commandKeyword(cmd) {
 	return cmd.trim().split(/\s+/)[0].toUpperCase()
@@ -44,17 +44,49 @@ export function parseNameList(text) {
 		.filter((name) => name.trim().length > 0)
 }
 
+/** Answers that every command can get. */
+const GENERIC_ANSWER = /^(BadCommand|SECERR|OK|ERR)\b/i
+
+/** Commands that answer with their own keyword in front of the value (FADER 70, POWER 1, ...). */
+const ECHOING_COMMANDS = ['FADER', 'MUTED', 'MONITORLEVEL', 'MONITORMUTE', 'POWER', 'FORMAT', 'SERIALNO']
+
 /**
- * True when a response to a *Names command is a real list: the device answered,
- * did not say BadCommand / SECERR / ERR, and the answer is not a stray status line.
- * An empty answer is a valid (empty) list.
+ * Does this answer belong to this command? Commands are sent one at a time, but an answer that arrives
+ * after its timeout would otherwise be taken for the answer to the next command.
+ * Commands that are not known here (custom commands) accept any answer.
  */
-export function isValidListResponse(res) {
-	if (res === null || res === undefined) return false
-	const text = res.text
-	if (/^(BadCommand|SECERR|ERR)\b/i.test(text)) return false
-	if (STATUS_LINE.test(text)) return false
+export function isAnswerTo(cmd, text) {
+	if (GENERIC_ANSWER.test(text)) return true
+
+	const keyword = commandKeyword(cmd)
+	const upper = text.toUpperCase()
+
+	if (LIST_COMMANDS.has(keyword)) {
+		// A list, with or without the command name in front, but not the list or status line of another command
+		for (const other of LIST_COMMANDS) {
+			if (other !== keyword && (upper === other || upper.startsWith(`${other} `))) return false
+		}
+		return !STATUS_LINE.test(text)
+	}
+	if (keyword === 'SYSTEM') return /^VER\b/i.test(text)
+	if (keyword === 'HEALTH') return /^(HEALTH|TEMPERATURE|H\d{3}VOLTS)\b/i.test(text)
+	if (keyword === 'AUTH') return /^AUTH\b/i.test(text)
+	if (ECHOING_COMMANDS.includes(keyword)) return new RegExp(`^${keyword}(\\s|$)`, 'i').test(text)
 	return true
+}
+
+/**
+ * What a *Names answer tells us:
+ *   'list'        the unit sent a list (possibly empty)
+ *   'unsupported' the unit does not know the command (BadCommand) - final
+ *   'unknown'     no answer, an error, or an answer that does not fit - try again later
+ */
+export function classifyListResponse(res, cmd) {
+	if (res === null || res === undefined) return 'unknown'
+	if (/^BadCommand\b/i.test(res.text)) return 'unsupported'
+	if (/^(SECERR|ERR)\b/i.test(res.text)) return 'unknown'
+	if (!isAnswerTo(cmd, res.text)) return 'unknown'
+	return 'list'
 }
 
 export function isBadCommand(res) {
