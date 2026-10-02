@@ -5,6 +5,18 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1]
+
+### Fixed
+
+- Units that put the command name in front of the format and macro lists (`FORMATNAMES A,B,C`) showed it
+  as part of the first format name. The name is now removed, and a bare `MACRONAMES` answer is read as
+  an empty macro list instead of a macro called "MACRONAMES".
+- The format and macro lists were requested twice when connecting. They are now requested once.
+- Format and macro names are kept exactly as the unit reports them, including a trailing space
+  (for example `Spdif `), so the unit recognises them when they are sent back. The "Current format"
+  feedback ignores trailing spaces when it compares names.
+
 ## [2.1.0]
 
 ### Added

@@ -2,10 +2,10 @@
 # yarn lockfile v1
 
 
-"@companion-module/base@~1.14.1":
-  version "1.14.1"
-  resolved "https://registry.yarnpkg.com/@companion-module/base/-/base-1.14.1.tgz#9a7b4299ae7541a107b9fd83e3f2af66d5f4e146"
-  integrity sha512-m6Gp1r8IJxh89zOB7jhVDdd4evmrNjuCsBDckEI0Nb/yP19gy18Wx1vRlyZFJshIhEMLgmNC1yqdwDgb+wYspw==
+"@companion-module/base@~1.12.1":
+  version "1.12.1"
+  resolved "https://registry.yarnpkg.com/@companion-module/base/-/base-1.12.1.tgz#b65d2bbce9d14e62ad9f5dfac00e768c4f5906d4"
+  integrity sha512-4hKs1g6XE8QCBh/dHYUa1seDl0U84TbpS8QnD8P+mFqMe7TupqgRkfAmLf3Ai9Fw8P7tE2zlFurMG6Y9iyA6YA==
   dependencies:
     ajv "^8.17.1"
     colord "^2.9.3"
@@ -788,10 +788,10 @@ prettier-linter-helpers@^1.0.1:
   dependencies:
     fast-diff "^1.1.2"
 
-prettier@^3.9.9:
-  version "3.9.9"
-  resolved "https://registry.yarnpkg.com/prettier/-/prettier-3.9.9.tgz#09b826918c91cd4cbc80e0cbd1d2a922ff04f233"
-  integrity sha512-Z/CJHIkdujO/OtN7nXUii0Rf3VT5SRuhjBA82Xvu2XhBUgX3nhP67T0LHceBdQLex7OOFGTox+Q5Yg8Jk2Qivg==
+prettier@^3.4.2:
+  version "3.9.8"
+  resolved "https://registry.yarnpkg.com/prettier/-/prettier-3.9.8.tgz#54e81128584538c81d85fce9d5fd77a410c385c5"
+  integrity sha512-WRFq3Wn3WId7LLROfMLdH7xaFr2jR62wU8nLO6rQUOLOxNZUviyJQs1M0iIhLexSFy+L+w0ch66wtoO2jRjG0A==
 
 rechoir@^0.8.0:
   version "0.8.0"

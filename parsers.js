@@ -20,12 +20,28 @@ export function isListCommand(cmd) {
 	return LIST_COMMANDS.has(commandKeyword(cmd))
 }
 
-/** "A,B,C" -> ['A', 'B', 'C'] (spaces inside names are kept, empty entries dropped). */
+/**
+ * Some units echo the command name in front of the list ("FORMATNAMES A,B,C"), others do not ("A,B,C").
+ * An empty list comes back as the bare command name. Remove the echo when it is there.
+ */
+export function stripListPrefix(cmd, text) {
+	const keyword = commandKeyword(cmd)
+	const upper = text.toUpperCase()
+	if (upper === keyword) return ''
+	if (upper.startsWith(`${keyword} `)) return text.slice(keyword.length + 1)
+	return text
+}
+
+/**
+ * "A,B,C" -> ['A', 'B', 'C']. Empty entries (a trailing comma) are dropped.
+ * Names are kept exactly as the unit reports them, including a trailing space, because the unit
+ * has to recognise the name again when it is sent back. Only leading spaces are removed.
+ */
 export function parseNameList(text) {
 	return text
 		.split(',')
-		.map((name) => name.trim())
-		.filter((name) => name.length > 0)
+		.map((name) => name.replace(/^\s+/, ''))
+		.filter((name) => name.trim().length > 0)
 }
 
 /**

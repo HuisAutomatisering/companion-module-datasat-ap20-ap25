@@ -34,7 +34,7 @@ export function getFeedbacks(self) {
 				color: combineRgb(255, 255, 255),
 			},
 			options: [nameOption(self.formats, 'format', 'Format', 'Digital Cinema', false)],
-			callback: (feedback) => self.state.format === String(feedback.options.format),
+			callback: (feedback) => self.state.format.trim() === String(feedback.options.format).trim(),
 		},
 
 		powerState: {

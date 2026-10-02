@@ -13,6 +13,7 @@ import {
 	parseBinary,
 	parseHealth,
 	parseNameList,
+	stripListPrefix,
 } from './parsers.js'
 
 const AP20_PORT = 14500
@@ -56,6 +57,7 @@ class DatasatAP20Instance extends InstanceBase {
 		this.namesLoaded = false
 		this.namesAttempts = 0
 		this.namesTimer = null
+		this.namesPromise = null
 		this.warmupTimer = null
 
 		// What this particular unit understands (detected after connecting).
@@ -242,6 +244,7 @@ class DatasatAP20Instance extends InstanceBase {
 			this.namesTimer = null
 		}
 		this.failPending()
+		this.namesPromise = null
 		this.rxBuffer = ''
 	}
 
@@ -305,7 +308,16 @@ class DatasatAP20Instance extends InstanceBase {
 	 * no answer at all is treated as "try again later".
 	 * Returns true when both lists got a definitive answer.
 	 */
-	async loadNames(session) {
+	loadNames(session) {
+		// The connect sequence and a power-on can ask at the same moment: share one run instead of asking twice.
+		if (this.namesPromise) return this.namesPromise
+		this.namesPromise = this.fetchNames(session).finally(() => {
+			this.namesPromise = null
+		})
+		return this.namesPromise
+	}
+
+	async fetchNames(session) {
 		const formats = await this.request('FORMATNAMES')
 		if (session !== this.session) return false
 		const macros = await this.request('MACRONAMES')
@@ -313,8 +325,8 @@ class DatasatAP20Instance extends InstanceBase {
 
 		this.caps.formatNames = isValidListResponse(formats)
 		this.caps.macroNames = isValidListResponse(macros)
-		this.formats = this.caps.formatNames ? parseNameList(formats.text) : []
-		this.macros = this.caps.macroNames ? parseNameList(macros.text) : []
+		this.formats = this.caps.formatNames ? parseNameList(stripListPrefix('FORMATNAMES', formats.text)) : []
+		this.macros = this.caps.macroNames ? parseNameList(stripListPrefix('MACRONAMES', macros.text)) : []
 		this.refreshDefinitions()
 
 		const yesNo = (flag) => (flag ? 'yes' : 'no')
