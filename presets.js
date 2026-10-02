@@ -8,6 +8,36 @@ const ORANGE = combineRgb(255, 102, 0)
 const AMBER = combineRgb(200, 120, 0)
 const BLUE = combineRgb(0, 70, 160)
 
+// A button is 72 px wide: at size 14 about 9 characters fit on a line, at size 7 about 18.
+const WIDE_LINE = 9
+const NARROW_LINE = 18
+
+/**
+ * Break a name into lines at word boundaries and pick one text size for it, so all buttons look alike
+ * (automatic sizing makes some names huge and others tiny). Only names with a very long word get the
+ * small size.
+ */
+export function formatLabel(name) {
+	const words = name.trim().split(/\s+/)
+	const longest = Math.max(...words.map((word) => word.length))
+	const small = longest > WIDE_LINE
+	const maxLine = small ? NARROW_LINE : WIDE_LINE
+
+	const lines = []
+	let current = ''
+	for (const word of words) {
+		if (current === '') current = word
+		else if (current.length + 1 + word.length <= maxLine) current += ` ${word}`
+		else {
+			lines.push(current)
+			current = word
+		}
+	}
+	if (current !== '') lines.push(current)
+
+	return { text: lines.join('\n'), size: small ? '7' : '14' }
+}
+
 /** A button that reacts on button down only, with white text on black. */
 function button(category, name, text, size, down, feedbacks = []) {
 	return {
@@ -95,9 +125,9 @@ export function getPresets(self) {
 
 	presets['powerToggle'] = button(
 		'Power',
-		'Power Toggle',
-		`AP20\n$(${label}:power_state)`,
-		'18',
+		'Power Toggle (colour shows the state)',
+		'POWER\nTOGGLE',
+		'14',
 		[{ actionId: 'powerToggle', options: {} }],
 		[
 			{ feedbackId: 'powerState', options: { state: 'on' }, style: { bgcolor: GREEN, color: WHITE } },
@@ -151,11 +181,12 @@ export function getPresets(self) {
 	// Formats: one button per format the unit reported
 	if (self.formats.length > 0) {
 		self.formats.forEach((format, index) => {
+			const look = formatLabel(format)
 			presets[`format_${index}`] = button(
 				'Formats',
-				`Format: ${format}`,
-				format,
-				'auto',
+				`Format: ${format.trim()}`,
+				look.text,
+				look.size,
 				[{ actionId: 'setFormat', options: { format } }],
 				[{ feedbackId: 'format', options: { format }, style: { bgcolor: GREEN, color: WHITE } }],
 			)
@@ -173,7 +204,8 @@ export function getPresets(self) {
 
 	// Macros: one button per macro the unit reported
 	self.macros.forEach((macro, index) => {
-		presets[`macro_${index}`] = button('Macros', `Macro: ${macro}`, macro, 'auto', [
+		const look = formatLabel(macro)
+		presets[`macro_${index}`] = button('Macros', `Macro: ${macro.trim()}`, look.text, look.size, [
 			{ actionId: 'runMacro', options: { macro } },
 		])
 	})
