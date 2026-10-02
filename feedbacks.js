@@ -1,4 +1,6 @@
 import { combineRgb } from '@companion-module/base'
+import { BOARDS } from './parsers.js'
+import { nameOption } from './actions.js'
 
 export function getFeedbacks(self) {
 	return {
@@ -31,26 +33,81 @@ export function getFeedbacks(self) {
 				bgcolor: combineRgb(0, 120, 0),
 				color: combineRgb(255, 255, 255),
 			},
+			options: [nameOption(self.formats, 'format', 'Format', 'Digital Cinema', false)],
+			callback: (feedback) => self.state.format === String(feedback.options.format),
+		},
+
+		powerState: {
+			type: 'boolean',
+			name: 'Unit power state is',
+			defaultStyle: {
+				bgcolor: combineRgb(0, 120, 0),
+				color: combineRgb(255, 255, 255),
+			},
 			options: [
 				{
-					type: 'textinput',
-					id: 'format',
-					label: 'Format name',
-					default: 'Digital Cinema',
+					type: 'dropdown',
+					id: 'state',
+					label: 'State',
+					default: 'on',
+					choices: [
+						{ id: 'on', label: 'On (operating)' },
+						{ id: 'starting', label: 'Starting (about 15 s after Power ON)' },
+						{ id: 'standby', label: 'Standby' },
+					],
 				},
 			],
-			callback: (feedback) => self.state.format === feedback.options.format,
+			callback: (feedback) => {
+				const warming = self.isWarmingUp()
+				switch (feedback.options.state) {
+					case 'starting':
+						return warming
+					case 'standby':
+						return !warming && self.state.power === 0
+					default:
+						return !warming && self.state.power === 1
+				}
+			},
 		},
 
 		powerFault: {
 			type: 'boolean',
-			name: 'Power supply fault (H336 voltages out of limits)',
+			name: 'Supply voltage fault',
 			defaultStyle: {
 				bgcolor: combineRgb(255, 102, 0),
 				color: combineRgb(0, 0, 0),
 			},
+			options: [
+				{
+					type: 'dropdown',
+					id: 'board',
+					label: 'Board',
+					default: 'any',
+					choices: [
+						{ id: 'any', label: 'Any board' },
+						...BOARDS.map((board) => ({ id: board, label: board })),
+						{ id: 'cpu', label: 'CPU supply (H336)' },
+					],
+				},
+			],
+			callback: (feedback) => {
+				const board = feedback.options.board ?? 'any'
+				if (board === 'any') return self.state.powerOk === false
+				if (board === 'cpu') return self.state.cpuOk === false
+				const entry = self.state.boards[board]
+				return Boolean(entry && entry.present === true && entry.ok === false)
+			},
+		},
+
+		phantomOn: {
+			type: 'boolean',
+			name: 'Microphone phantom power is on',
+			defaultStyle: {
+				bgcolor: combineRgb(200, 120, 0),
+				color: combineRgb(0, 0, 0),
+			},
 			options: [],
-			callback: () => self.state.powerOk === false,
+			callback: () => self.state.phantomOn === true,
 		},
 
 		faderLevel: {

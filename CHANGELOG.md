@@ -5,12 +5,54 @@ All notable changes to this module are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0]
 
 ### Added
 
-- Shared Bitfocus module checks on every push, via the reusable
-  `bitfocus/actions` workflow. Each run also uploads a built `pkg.tgz`.
+- Power ON and Standby now use the unit's own `@POWER` command instead of macros, and a new Power Toggle
+  action was added. The real power state is shown in the `power_state` variable (On, Standby, Starting)
+  and in the new "Unit power state" feedback. The unit needs about 15 seconds to start; this is shown
+  as "Starting".
+- The Select Format and Run Macro actions, and the "Current format" feedback, are dropdowns filled with
+  the names on the unit (`@FORMATNAMES`, `@MACRONAMES`). A preset button is created for every format and
+  macro.
+- Screensaver action (`@SCR`) and GPIO Pulse action (`@PULSE`, 250 ms, GPIO 1 - 21).
+- Supply monitoring per board (H331, H332, H335, H336, H338) with the variables `board_h331` to
+  `board_h338`, plus `phantom` (microphone phantom power), `cpu_power` and `power_faults`.
+- Feedbacks for a supply fault on a chosen board or the CPU supply, and for phantom power being on.
+- Config option for the temperature / voltage poll interval.
+- Presets for Power Toggle, Wake display, Screensaver, supply status, phantom power and temperatures.
+- The Send Custom Command action writes the answer of the unit to the Companion log.
+- Capability detection on connect: the module learns which of the extra commands the unit accepts
+  (an unknown command is answered with `BadCommand`) and falls back to text fields and the power macros
+  when a command is missing.
+
+### Changed
+
+- Commands are sent one at a time and every answer is matched to its command. Commands from buttons go
+  before status polling. A command that gets no answer no longer disturbs the following ones.
+- While the unit is in standby only its power state is polled. The format and macro lists are loaded
+  as soon as the unit is operating.
+- The "Supply voltage fault" feedback now covers all boards by default and has a board option.
+- The Power ON / Standby macro names in the module config are only a fallback for units without
+  `@POWER` and are empty by default.
+- A network error while the unit is unreachable is logged once as a warning and after that at debug level.
+- The password is masked in the debug log.
+- CI workflows use `actions/checkout@v5`, `github/codeql-action@v4` and `ubuntu-24.04`.
+- Dependabot no longer proposes major version updates of `@companion-module/base` and
+  `@companion-module/tools`, which need a deliberate migration of the module code.
+- The generic logo was added to the `Brand` folder.
+
+### Fixed
+
+- Preset button texts that show variables now use the actual label of the connection.
+
+## [2.0.1]
+
+### Added
+
+- Shared Bitfocus module checks on every push, via the reusable `bitfocus/actions` workflow. Each run
+  also uploads a built `pkg.tgz`.
 - CodeQL analysis workflow, weekly and on every push to `main`.
 - Dependabot configuration for GitHub Actions and npm dependencies (monthly).
 - Issue and pull request templates.
@@ -20,27 +62,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Pinned the package manager to Yarn 4 via corepack.
-- Raised the `@companion-module/tools` floor to `^2.8.0`, the minimum the
-  Bitfocus checks accept.
+- Module id renamed to `datasat-ap20-ap25` to match the repository name, as required by the Bitfocus
+  module checks. Existing connections migrate automatically via `legacyIds`.
+- Manifest `runtime.apiVersion` corrected to `0.0.0`.
 
 ## [2.0.0]
 
 ### Added
 
 - Power ON and Standby actions, driven by configurable macro names.
-- Board temperature variables and power-supply health monitoring, with a
-  feedback for power faults.
+- Board temperature variables and power-supply health monitoring, with a feedback for power faults.
 - Monitor level and monitor mute actions.
 - Custom command action for anything not covered by a dedicated action.
 - Presets for mute toggle, volume up/down and reference level 7.0.
 
 ### Changed
 
-- Status polling keeps button feedback in sync with changes made on the device
-  front panel.
+- Status polling keeps button feedback in sync with changes made on the device front panel.
 
 ## [1.0.0]
 
-- Initial release: master fader, master mute, format selection and macro
-  execution over TCP port 14500.
+- Initial release: master fader, master mute, format selection and macro execution over TCP port 14500.

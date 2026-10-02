@@ -4,8 +4,34 @@ import { getFeedbacks } from './feedbacks.js'
 import { getVariables } from './variables.js'
 import { getPresets } from './presets.js'
 import { UpgradeScripts } from './upgrades.js'
+import {
+	BOARDS,
+	commandKeyword,
+	isBadCommand,
+	isListCommand,
+	isValidListResponse,
+	parseBinary,
+	parseHealth,
+	parseNameList,
+} from './parsers.js'
 
 const AP20_PORT = 14500
+
+// How long to wait for the device to answer one command before moving on.
+const RESPONSE_TIMEOUT_MS = 1500
+
+// The unit needs about 15 seconds to become operational after @POWER 1 (TN-H413-01).
+const POWER_WARMUP_MS = 15000
+
+// Retry schedule for loading the format/macro lists when the device did not answer in time.
+const NAMES_RETRY_MS = 10000
+const NAMES_MAX_ATTEMPTS = 5
+
+// Commands polled every poll interval while the unit is operating.
+const STATUS_POLL = ['FADER', 'MUTED', 'FORMAT', 'MONITORLEVEL', 'MONITORMUTE']
+
+// Commands polled every health interval while the unit is operating.
+const HEALTH_POLL = ['HEALTH TEMPERATURE', ...BOARDS.map((board) => `HEALTH ${board}VOLTS`)]
 
 class DatasatAP20Instance extends InstanceBase {
 	constructor(internal) {
@@ -13,7 +39,29 @@ class DatasatAP20Instance extends InstanceBase {
 
 		this.socket = null
 		this.pollTimer = null
+		this.pollActive = false
 		this.rxBuffer = ''
+
+		// Commands are sent one at a time so every answer can be matched to its command.
+		// User actions go first, polling goes second.
+		this.userQueue = []
+		this.pollQueue = []
+		this.inflight = null
+
+		// Increases on every (dis)connect so stale async work can detect that it is outdated.
+		this.session = 0
+		this.authFailed = false
+		this.errorLogged = false
+		this.lastHealth = 0
+		this.namesLoaded = false
+		this.namesAttempts = 0
+		this.namesTimer = null
+		this.warmupTimer = null
+
+		// What this particular unit understands (detected after connecting).
+		this.caps = { power: false, formatNames: false, macroNames: false }
+		this.formats = []
+		this.macros = []
 
 		// Last known device state
 		this.state = {
@@ -25,6 +73,11 @@ class DatasatAP20Instance extends InstanceBase {
 			version: '',
 			serial: '',
 			temps: { t1: null, t2: null, t3: null },
+			power: null, // 1 = operating, 0 = standby, null = unknown
+			powerWarmupUntil: 0,
+			boards: Object.fromEntries(BOARDS.map((board) => [board, { present: null, ok: null }])),
+			phantomOn: null,
+			cpuOk: null,
 			powerOk: true,
 		}
 	}
@@ -34,10 +87,15 @@ class DatasatAP20Instance extends InstanceBase {
 
 		this.updateStatus(InstanceStatus.Connecting)
 
-		this.setActionDefinitions(getActions(this))
-		this.setFeedbackDefinitions(getFeedbacks(this))
 		this.setVariableDefinitions(getVariables())
-		this.setPresetDefinitions(getPresets(this))
+		this.setVariableValues({
+			power_state: '',
+			power: '',
+			power_faults: '',
+			phantom: '',
+			cpu_power: '',
+		})
+		this.refreshDefinitions()
 
 		this.initConnection()
 	}
@@ -48,11 +106,18 @@ class DatasatAP20Instance extends InstanceBase {
 	}
 
 	async destroy() {
-		this.stopPolling()
-		if (this.socket) {
-			this.socket.destroy()
-			this.socket = null
+		this.teardownConnection()
+		if (this.warmupTimer) {
+			clearTimeout(this.warmupTimer)
+			this.warmupTimer = null
 		}
+	}
+
+	/** (Re)publish everything that depends on what the device reported. */
+	refreshDefinitions() {
+		this.setActionDefinitions(getActions(this))
+		this.setFeedbackDefinitions(getFeedbacks(this))
+		this.setPresetDefinitions(getPresets(this))
 	}
 
 	getConfigFields() {
@@ -72,20 +137,6 @@ class DatasatAP20Instance extends InstanceBase {
 				default: '',
 			},
 			{
-				type: 'textinput',
-				id: 'powerOnMacro',
-				label: 'Power ON macro name (as defined on the device)',
-				width: 6,
-				default: 'PowerOn',
-			},
-			{
-				type: 'textinput',
-				id: 'standbyMacro',
-				label: 'Standby macro name (as defined on the device)',
-				width: 6,
-				default: 'Standby',
-			},
-			{
 				type: 'number',
 				id: 'pollInterval',
 				label: 'Status poll interval (ms, 0 = disable polling)',
@@ -94,16 +145,39 @@ class DatasatAP20Instance extends InstanceBase {
 				min: 0,
 				max: 60000,
 			},
+			{
+				type: 'number',
+				id: 'healthInterval',
+				label: 'Temperature / voltage poll interval (seconds, 0 = disable)',
+				width: 8,
+				default: 30,
+				min: 0,
+				max: 3600,
+			},
+			{
+				type: 'textinput',
+				id: 'powerOnMacro',
+				label: 'Fallback Power ON macro (only used if the unit does not support @POWER)',
+				width: 6,
+				default: '',
+			},
+			{
+				type: 'textinput',
+				id: 'standbyMacro',
+				label: 'Fallback Standby macro (only used if the unit does not support @POWER)',
+				width: 6,
+				default: '',
+			},
 		]
 	}
 
-	initConnection() {
-		this.stopPolling()
+	// ------------------------------------------------------------------
+	// Connection handling
+	// ------------------------------------------------------------------
 
-		if (this.socket) {
-			this.socket.destroy()
-			this.socket = null
-		}
+	initConnection() {
+		this.teardownConnection()
+		this.resetDeviceKnowledge()
 
 		if (!this.config.host) {
 			this.updateStatus(InstanceStatus.BadConfig, 'No IP address configured')
@@ -119,27 +193,20 @@ class DatasatAP20Instance extends InstanceBase {
 		})
 
 		this.socket.on('error', (err) => {
-			this.log('error', `Network error: ${err.message}`)
+			// The helper keeps retrying, so only report the first error of an outage at a visible level.
+			this.log(this.errorLogged ? 'debug' : 'warn', `Network error: ${err.message}`)
+			this.errorLogged = true
 			this.updateStatus(InstanceStatus.ConnectionFailure, err.message)
-			this.stopPolling()
+			this.handleDisconnect()
+		})
+
+		this.socket.on('end', () => {
+			this.log('debug', 'Connection closed by the device')
+			this.handleDisconnect()
 		})
 
 		this.socket.on('connect', () => {
-			this.log('info', `Connected to AP20/AP25 at ${this.config.host}:${AP20_PORT}`)
-			this.updateStatus(InstanceStatus.Ok)
-			this.rxBuffer = ''
-
-			// Authenticate if a password is configured (valid for the duration of this TCP connection)
-			if (this.config.password && this.config.password.length > 0) {
-				this.sendCommand(`AUTH ${this.config.password}`)
-			}
-
-			// Get some one-time info and an initial state snapshot
-			this.sendCommand('SYSTEM')
-			this.sendCommand('SERIALNO')
-			this.pollState()
-
-			this.startPolling()
+			this.onConnect()
 		})
 
 		this.socket.on('data', (chunk) => {
@@ -147,68 +214,327 @@ class DatasatAP20Instance extends InstanceBase {
 		})
 	}
 
+	teardownConnection() {
+		this.handleDisconnect()
+		if (this.socket) {
+			this.socket.destroy()
+			this.socket = null
+		}
+	}
+
+	resetDeviceKnowledge() {
+		this.caps = { power: false, formatNames: false, macroNames: false }
+		this.formats = []
+		this.macros = []
+		this.namesLoaded = false
+		this.state.power = null
+		this.state.powerWarmupUntil = 0
+		this.authFailed = false
+		this.refreshDefinitions()
+	}
+
+	/** Stop everything that belongs to the current connection. Safe to call repeatedly. */
+	handleDisconnect() {
+		this.session++
+		this.stopPolling()
+		if (this.namesTimer) {
+			clearTimeout(this.namesTimer)
+			this.namesTimer = null
+		}
+		this.failPending()
+		this.rxBuffer = ''
+	}
+
+	onConnect() {
+		this.errorLogged = false
+		this.log('info', `Connected to AP20/AP25 at ${this.config.host}:${AP20_PORT}`)
+		this.updateStatus(InstanceStatus.Ok)
+		this.rxBuffer = ''
+		this.authFailed = false
+		this.lastHealth = 0
+
+		const session = ++this.session
+		this.runConnectSequence(session).catch((err) => {
+			this.log('error', `Startup sequence failed: ${err.message}`)
+		})
+	}
+
+	/**
+	 * Authenticate, read device info, detect what this unit supports, take a first snapshot and start polling.
+	 * Every await is followed by a session check so a reconnect cleanly abandons an outdated run.
+	 */
+	async runConnectSequence(session) {
+		const alive = () => session === this.session && !this.authFailed
+
+		// Authentication is valid for the duration of this TCP connection
+		if (this.config.password && this.config.password.length > 0) {
+			await this.request(`AUTH ${this.config.password}`)
+			if (!alive()) return
+		}
+
+		await this.request('SYSTEM')
+		await this.request('SERIALNO')
+		if (!alive()) return
+
+		// @POWER is not in TN-H413 rev D but is accepted by real AP20/AP25 units.
+		const power = await this.request('POWER')
+		if (!alive()) return
+		this.caps.power = power !== null && /^POWER\s+[01]$/i.test(power.text)
+		this.log('debug', `Capability @POWER: ${this.caps.power ? 'supported' : 'not supported'}`)
+
+		if (this.canProbeNames()) {
+			await this.loadNames(session)
+		} else {
+			this.log('info', 'The unit is in standby: format and macro lists are loaded after power on')
+		}
+		if (!alive()) return
+
+		await this.pollOnce()
+		if (!alive()) return
+
+		this.startPolling()
+	}
+
+	/** Format/macro lists can only be read reliably while the unit is operating. */
+	canProbeNames() {
+		return !this.caps.power || (this.state.power === 1 && !this.isWarmingUp())
+	}
+
+	/**
+	 * Ask the unit for its format and macro names. A BadCommand answer means "not supported" and is final;
+	 * no answer at all is treated as "try again later".
+	 * Returns true when both lists got a definitive answer.
+	 */
+	async loadNames(session) {
+		const formats = await this.request('FORMATNAMES')
+		if (session !== this.session) return false
+		const macros = await this.request('MACRONAMES')
+		if (session !== this.session) return false
+
+		this.caps.formatNames = isValidListResponse(formats)
+		this.caps.macroNames = isValidListResponse(macros)
+		this.formats = this.caps.formatNames ? parseNameList(formats.text) : []
+		this.macros = this.caps.macroNames ? parseNameList(macros.text) : []
+		this.refreshDefinitions()
+
+		const yesNo = (flag) => (flag ? 'yes' : 'no')
+		this.log(
+			'debug',
+			`Capabilities: FORMATNAMES ${yesNo(this.caps.formatNames)}, MACRONAMES ${yesNo(this.caps.macroNames)}`,
+		)
+		if (this.caps.formatNames || this.caps.macroNames) {
+			this.log('info', `Loaded ${this.formats.length} formats and ${this.macros.length} macros from the unit`)
+		}
+
+		const complete = formats !== null && macros !== null
+		this.namesLoaded = complete
+		if (!complete) this.scheduleNamesRetry(session)
+		return complete
+	}
+
+	scheduleNamesRetry(session) {
+		if (this.namesAttempts >= NAMES_MAX_ATTEMPTS) return
+		this.namesAttempts++
+		if (this.namesTimer) clearTimeout(this.namesTimer)
+		this.namesTimer = setTimeout(() => {
+			this.namesTimer = null
+			if (session !== this.session || this.namesLoaded || !this.canProbeNames()) return
+			this.loadNames(session).catch((err) => {
+				this.log('error', `Loading format and macro names failed: ${err.message}`)
+			})
+		}, NAMES_RETRY_MS)
+	}
+
+	/** Called when the unit has become operational and the lists are still missing. */
+	ensureNames() {
+		if (this.namesLoaded || !this.socket || !this.socket.isConnected) return
+		this.namesAttempts = 0
+		const session = this.session
+		this.loadNames(session).catch((err) => {
+			this.log('error', `Loading format and macro names failed: ${err.message}`)
+		})
+	}
+
+	// ------------------------------------------------------------------
+	// Polling
+	// ------------------------------------------------------------------
+
 	startPolling() {
+		this.stopPolling()
+
 		const interval = Number(this.config.pollInterval)
 		if (!interval || interval <= 0) return
 
-		this.pollTimer = setInterval(() => {
-			this.pollState()
-		}, interval)
+		this.pollActive = true
+		const session = this.session
+
+		const run = async () => {
+			if (!this.pollActive || session !== this.session) return
+			await this.pollOnce()
+			if (!this.pollActive || session !== this.session) return
+			this.pollTimer = setTimeout(run, interval)
+		}
+
+		this.pollTimer = setTimeout(run, interval)
 	}
 
 	stopPolling() {
+		this.pollActive = false
 		if (this.pollTimer) {
-			clearInterval(this.pollTimer)
+			clearTimeout(this.pollTimer)
 			this.pollTimer = null
 		}
 	}
 
-	pollState() {
-		this.sendCommand('FADER')
-		this.sendCommand('MUTED')
-		this.sendCommand('FORMAT')
-		this.sendCommand('MONITORLEVEL')
-		this.sendCommand('MONITORMUTE')
-		this.sendCommand('HEALTH TEMPERATURE')
-		this.sendCommand('HEALTH H336VOLTS')
-	}
-
 	/**
-	 * Send a command to the AP20/AP25.
-	 * Protocol: '@' + COMMAND [args] + <CR>  (TN-H413 rev D)
+	 * One polling round. While the unit is in standby (or starting up) only the power state is read.
+	 * A command that gets no answer ends the round, so an unresponsive unit costs one timeout per round.
 	 */
-	sendCommand(cmd) {
-		if (this.socket && this.socket.isConnected) {
-			this.log('debug', `TX: @${cmd}`)
-			this.socket.send(`@${cmd}\r`)
-		} else {
-			this.log('warn', `Not connected, cannot send: ${cmd}`)
+	async pollOnce() {
+		const session = this.session
+
+		if (this.caps.power) {
+			const res = await this.request('POWER')
+			if (res === null || session !== this.session) return
+			if (this.state.power !== 1 || this.isWarmingUp()) return
+		}
+
+		for (const cmd of STATUS_POLL) {
+			const res = await this.request(cmd)
+			if (res === null || session !== this.session) return
+		}
+
+		const healthMs = Number(this.config.healthInterval) * 1000
+		if (healthMs > 0 && Date.now() - this.lastHealth >= healthMs) {
+			this.lastHealth = Date.now()
+			for (const cmd of HEALTH_POLL) {
+				const res = await this.request(cmd)
+				if (res === null || session !== this.session) return
+			}
 		}
 	}
 
+	// ------------------------------------------------------------------
+	// Sending: one command at a time, answers matched to commands
+	// ------------------------------------------------------------------
+
 	/**
-	 * Responses are ASCII terminated by <CR>. SYSTEM uses <LF> between fields,
-	 * so we split on CR and tolerate stray LFs.
+	 * Send a command and wait for its answer (one CR-terminated chunk).
+	 * Resolves with { text, lines } or null when not connected or when no answer arrived in time. Never rejects.
+	 */
+	request(cmd, { user = false } = {}) {
+		return new Promise((resolve) => {
+			if (!this.socket || !this.socket.isConnected) {
+				this.log('debug', `Not connected, cannot send: ${commandKeyword(cmd) === 'AUTH' ? 'AUTH ****' : cmd}`)
+				resolve(null)
+				return
+			}
+			const queue = user ? this.userQueue : this.pollQueue
+			queue.push({ cmd, resolve, timer: null })
+			this.pump()
+		})
+	}
+
+	pump() {
+		if (this.inflight) return
+
+		const item = this.userQueue.shift() ?? this.pollQueue.shift()
+		if (!item) return
+
+		if (!this.socket || !this.socket.isConnected) {
+			item.resolve(null)
+			this.pump()
+			return
+		}
+
+		this.inflight = item
+		this.log('debug', `TX: @${commandKeyword(item.cmd) === 'AUTH' ? 'AUTH ****' : item.cmd}`)
+		item.timer = setTimeout(() => {
+			this.log('debug', `No response to @${commandKeyword(item.cmd)}`)
+			this.finishInflight(null)
+		}, RESPONSE_TIMEOUT_MS)
+
+		Promise.resolve(this.socket.send(`@${item.cmd}\r`)).catch((err) => {
+			this.log('debug', `Send failed: ${err.message}`)
+		})
+	}
+
+	finishInflight(response) {
+		const item = this.inflight
+		if (!item) return
+		clearTimeout(item.timer)
+		this.inflight = null
+		item.resolve(response)
+		this.pump()
+	}
+
+	/** Resolve everything that is still waiting with "no answer" (used when the connection goes away). */
+	failPending() {
+		const pending = [...this.userQueue, ...this.pollQueue]
+		this.userQueue = []
+		this.pollQueue = []
+		if (this.inflight) {
+			clearTimeout(this.inflight.timer)
+			pending.unshift(this.inflight)
+			this.inflight = null
+		}
+		for (const item of pending) item.resolve(null)
+	}
+
+	/**
+	 * Fire-and-forget command for actions.
+	 * Protocol: '@' + COMMAND [args] + <CR>  (TN-H413 rev D)
+	 * With logResponse the answer is written to the Companion log, which helps when trying out commands.
+	 */
+	sendCommand(cmd, { logResponse = false } = {}) {
+		this.request(cmd, { user: true }).then((res) => {
+			if (res === null) {
+				if (logResponse) this.log('info', `No response to @${cmd}`)
+				return
+			}
+			if (isBadCommand(res)) {
+				this.log('warn', `The unit does not support @${commandKeyword(cmd)} (BadCommand)`)
+			} else if (logResponse) {
+				this.log('info', `Response to @${cmd}: ${res.text.replace(/\n/g, ' | ') || '(empty)'}`)
+			}
+		})
+	}
+
+	// ------------------------------------------------------------------
+	// Receiving
+	// ------------------------------------------------------------------
+
+	/**
+	 * Responses are ASCII terminated by <CR>. SYSTEM uses <LF> between its fields, so a chunk can hold
+	 * several lines. Each chunk answers the command that is currently in flight.
 	 */
 	processData(data) {
 		this.rxBuffer += data
 
 		let idx
 		while ((idx = this.rxBuffer.indexOf('\r')) >= 0) {
-			const line = this.rxBuffer.slice(0, idx)
+			const raw = this.rxBuffer.slice(0, idx)
 			this.rxBuffer = this.rxBuffer.slice(idx + 1)
 
-			// SYSTEM response contains LF-separated subfields
-			for (const part of line.split('\n')) {
-				const clean = part.replace(/\0/g, '').trim()
-				if (clean.length > 0) this.parseResponse(clean)
+			const lines = raw
+				.replace(/\0/g, '')
+				.split('\n')
+				.map((line) => line.trim())
+				.filter((line) => line.length > 0)
+			const text = lines.join('\n')
+
+			this.log('debug', `RX: ${text.replace(/\n/g, ' | ') || '(empty)'}`)
+
+			const cmd = this.inflight ? this.inflight.cmd : null
+			// Name lists carry no command echo: they are handed to the code that asked for them.
+			if (!(cmd && isListCommand(cmd))) {
+				for (const line of lines) this.parseResponse(line, cmd)
 			}
+			this.finishInflight({ text, lines })
 		}
 	}
 
-	parseResponse(line) {
-		this.log('debug', `RX: ${line}`)
-
+	parseResponse(line, cmd) {
 		const spaceIdx = line.indexOf(' ')
 		const keyword = spaceIdx >= 0 ? line.slice(0, spaceIdx) : line
 		const value = spaceIdx >= 0 ? line.slice(spaceIdx + 1).trim() : ''
@@ -217,6 +543,7 @@ class DatasatAP20Instance extends InstanceBase {
 			case 'AUTH':
 				if (value === 'SECERR') {
 					this.log('error', 'Authentication failed (SECERR) - check the password in the module config')
+					this.authFailed = true
 					this.updateStatus(InstanceStatus.AuthenticationFailure, 'Wrong password')
 				} else {
 					this.log('info', `Authenticated with ${value} level`)
@@ -228,6 +555,12 @@ class DatasatAP20Instance extends InstanceBase {
 				this.log('warn', 'Command rejected (SECERR) - a password is required. Set it in the module config.')
 				this.updateStatus(InstanceStatus.AuthenticationFailure, 'Password required')
 				break
+
+			case 'POWER': {
+				const state = parseBinary(value)
+				if (state !== null) this.setPowerState(state)
+				break
+			}
 
 			case 'FADER': {
 				const lvl = parseInt(value, 10)
@@ -274,28 +607,9 @@ class DatasatAP20Instance extends InstanceBase {
 				break
 			}
 
-			case 'HEALTH': {
-				// value is e.g. "TEMPERATURE 34,29,25" or "H336VOLTS 1,3.39,5.10,15.0,-14.4,0.0,1"
-				const subIdx = value.indexOf(' ')
-				if (subIdx < 0) break
-				const subCmd = value.slice(0, subIdx)
-				const subVal = value.slice(subIdx + 1).trim()
-
-				if (subCmd === 'TEMPERATURE') {
-					const [t1, t2, t3] = subVal.split(',')
-					this.state.temps = { t1, t2, t3 }
-					this.setVariableValues({ temp1: t1, temp2: t2, temp3: t3 })
-				} else if (subCmd === 'H336VOLTS') {
-					// First field is <vok>: 1 = all voltages within limits, 0 = fault, NA = board absent
-					if (subVal !== 'NA') {
-						const vok = subVal.split(',')[0]
-						this.state.powerOk = vok === '1'
-						this.setVariableValues({ power: this.state.powerOk ? 'OK' : 'FAULT' })
-						this.checkFeedbacks('powerFault')
-					}
-				}
+			case 'HEALTH':
+				this.handleHealth(value)
 				break
-			}
 
 			case 'VER':
 				this.state.version = value
@@ -308,7 +622,7 @@ class DatasatAP20Instance extends InstanceBase {
 				break
 
 			case 'OK':
-				// Macro executed successfully
+				// Macro executed, pulse sent, screensaver changed
 				break
 
 			case 'ERR':
@@ -316,9 +630,125 @@ class DatasatAP20Instance extends InstanceBase {
 				break
 
 			default:
-				// VERDATE, MAC, HEALTH, BOARDINFO etc. - log only
+				// A health answer without its "HEALTH" prefix is still understood
+				if (cmd && commandKeyword(cmd) === 'HEALTH') this.handleHealth(line)
+				// VERDATE, MAC, BadCommand etc. - the sender of the command deals with it
 				break
 		}
+	}
+
+	// ------------------------------------------------------------------
+	// Power state
+	// ------------------------------------------------------------------
+
+	isWarmingUp() {
+		return Date.now() < this.state.powerWarmupUntil
+	}
+
+	setPowerState(power) {
+		const previous = this.state.power
+		this.state.power = power
+		if (power === 0) this.cancelWarmup()
+		this.updatePowerVariables()
+		if (power === 1 && previous !== 1 && !this.isWarmingUp()) this.ensureNames()
+	}
+
+	updatePowerVariables() {
+		let label = ''
+		if (this.isWarmingUp()) label = 'Starting'
+		else if (this.state.power === 1) label = 'On'
+		else if (this.state.power === 0) label = 'Standby'
+		this.setVariableValues({ power_state: label })
+		this.checkFeedbacks('powerState')
+	}
+
+	beginWarmup() {
+		this.state.powerWarmupUntil = Date.now() + POWER_WARMUP_MS
+		if (this.warmupTimer) clearTimeout(this.warmupTimer)
+		this.warmupTimer = setTimeout(() => {
+			this.warmupTimer = null
+			this.state.powerWarmupUntil = 0
+			this.updatePowerVariables()
+			if (this.state.power === 1) this.ensureNames()
+		}, POWER_WARMUP_MS)
+		this.updatePowerVariables()
+	}
+
+	cancelWarmup() {
+		this.state.powerWarmupUntil = 0
+		if (this.warmupTimer) {
+			clearTimeout(this.warmupTimer)
+			this.warmupTimer = null
+		}
+	}
+
+	/**
+	 * Power the unit on or put it in standby. Uses @POWER when the unit supports it,
+	 * otherwise the optional fallback macros from the module config.
+	 */
+	setPower(on) {
+		if (this.caps.power) {
+			if (on) this.beginWarmup()
+			else this.cancelWarmup()
+			this.sendCommand(`POWER ${on ? 1 : 0}`)
+			return
+		}
+
+		const macro = on ? this.config.powerOnMacro : this.config.standbyMacro
+		if (macro && macro.length > 0) {
+			this.sendCommand(`RUNMACRO ${macro}`)
+		} else {
+			this.log('warn', 'The unit does not support @POWER and no fallback macro is set in the module config')
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Health
+	// ------------------------------------------------------------------
+
+	handleHealth(value) {
+		const info = parseHealth(value)
+		if (!info) return
+
+		if (info.kind === 'temperature') {
+			const [t1, t2, t3] = info.temps
+			this.state.temps = { t1, t2, t3 }
+			this.setVariableValues({ temp1: t1, temp2: t2, temp3: t3 })
+			return
+		}
+
+		this.state.boards[info.board] = { present: info.present, ok: info.ok }
+		let status = ''
+		if (!info.present) status = 'N/A'
+		else if (info.ok === true) status = 'OK'
+		else if (info.ok === false) status = 'FAULT'
+		this.setVariableValues({ [`board_${info.board.toLowerCase()}`]: status })
+
+		if (info.board === 'H336') {
+			if (info.phantomOn !== null) {
+				this.state.phantomOn = info.phantomOn
+				this.setVariableValues({ phantom: info.phantomOn ? 'On' : 'Off' })
+				this.checkFeedbacks('phantomOn')
+			}
+			if (info.cpuOk !== null) {
+				this.state.cpuOk = info.cpuOk
+				this.setVariableValues({ cpu_power: info.cpuOk ? 'OK' : 'FAULT' })
+			}
+		}
+
+		this.updateHealthSummary()
+	}
+
+	updateHealthSummary() {
+		const faults = BOARDS.filter((board) => {
+			const entry = this.state.boards[board]
+			return entry.present === true && entry.ok === false
+		})
+		if (this.state.cpuOk === false) faults.push('CPU')
+
+		this.state.powerOk = faults.length === 0
+		this.setVariableValues({ power: this.state.powerOk ? 'OK' : 'FAULT', power_faults: faults.join(', ') })
+		this.checkFeedbacks('powerFault')
 	}
 }
 

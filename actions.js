@@ -1,3 +1,27 @@
+/**
+ * A dropdown filled with the names the unit reported, or a plain text field when the unit
+ * cannot list them. The dropdown also accepts a typed name, e.g. one that was added after loading.
+ */
+export function nameOption(names, id, label, fallbackDefault, useVariables = true) {
+	if (names.length > 0) {
+		return {
+			type: 'dropdown',
+			id,
+			label,
+			default: names[0],
+			choices: names.map((name) => ({ id: name, label: name })),
+			allowCustom: true,
+		}
+	}
+	return {
+		type: 'textinput',
+		id,
+		label: `${label} (must match exactly, spaces allowed)`,
+		default: fallbackDefault,
+		useVariables,
+	}
+}
+
 export function getActions(self) {
 	return {
 		setFader: {
@@ -66,34 +90,18 @@ export function getActions(self) {
 
 		setFormat: {
 			name: 'Select Format',
-			options: [
-				{
-					type: 'textinput',
-					id: 'format',
-					label: 'Format name (must match exactly, spaces allowed)',
-					default: 'Digital Cinema',
-					useVariables: true,
-				},
-			],
+			options: [nameOption(self.formats, 'format', 'Format', 'Digital Cinema')],
 			callback: async (action, context) => {
-				const format = await context.parseVariablesInString(action.options.format)
+				const format = await context.parseVariablesInString(String(action.options.format))
 				self.sendCommand(`FORMAT ${format}`)
 			},
 		},
 
 		runMacro: {
 			name: 'Run Macro',
-			options: [
-				{
-					type: 'textinput',
-					id: 'macro',
-					label: 'Macro name (must match exactly, spaces allowed)',
-					default: '',
-					useVariables: true,
-				},
-			],
+			options: [nameOption(self.macros, 'macro', 'Macro', '')],
 			callback: async (action, context) => {
-				const macro = await context.parseVariablesInString(action.options.macro)
+				const macro = await context.parseVariablesInString(String(action.options.macro))
 				self.sendCommand(`RUNMACRO ${macro}`)
 			},
 		},
@@ -141,18 +149,65 @@ export function getActions(self) {
 		},
 
 		powerOn: {
-			name: 'Power ON (runs configured macro)',
+			name: 'Power ON',
 			options: [],
 			callback: () => {
-				self.sendCommand(`RUNMACRO ${self.config.powerOnMacro || 'PowerOn'}`)
+				self.setPower(true)
 			},
 		},
 
 		standby: {
-			name: 'Standby (runs configured macro)',
+			name: 'Standby',
 			options: [],
 			callback: () => {
-				self.sendCommand(`RUNMACRO ${self.config.standbyMacro || 'Standby'}`)
+				self.setPower(false)
+			},
+		},
+
+		powerToggle: {
+			name: 'Power Toggle (ON / Standby)',
+			options: [],
+			callback: () => {
+				self.setPower(self.state.power !== 1)
+			},
+		},
+
+		screensaver: {
+			name: 'Screensaver',
+			options: [
+				{
+					type: 'dropdown',
+					id: 'mode',
+					label: 'Mode',
+					default: 'wake',
+					choices: [
+						{ id: 'wake', label: 'Wake the display (deactivate screensaver)' },
+						{ id: 'activate', label: 'Activate screensaver' },
+					],
+				},
+			],
+			callback: (action) => {
+				// Per TN-H413-01: SCR ON deactivates the screensaver, SCR OFF shows it.
+				self.sendCommand(`SCR ${action.options.mode === 'activate' ? 'OFF' : 'ON'}`)
+			},
+		},
+
+		gpioPulse: {
+			name: 'GPIO Pulse (250 ms)',
+			options: [
+				{
+					type: 'number',
+					id: 'gpio',
+					label: 'GPIO number (1 - 21)',
+					default: 1,
+					min: 1,
+					max: 21,
+					step: 1,
+				},
+			],
+			callback: (action) => {
+				const gpio = Math.round(Number(action.options.gpio))
+				if (gpio >= 1 && gpio <= 21) self.sendCommand(`PULSE ${gpio}`)
 			},
 		},
 
@@ -169,7 +224,8 @@ export function getActions(self) {
 			],
 			callback: async (action, context) => {
 				const cmd = await context.parseVariablesInString(action.options.command)
-				if (cmd.length > 0) self.sendCommand(cmd)
+				// The answer is written to the Companion log, handy for trying out commands
+				if (cmd.length > 0) self.sendCommand(cmd, { logResponse: true })
 			},
 		},
 	}
