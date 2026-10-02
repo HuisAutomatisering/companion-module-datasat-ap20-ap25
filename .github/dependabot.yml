@@ -19,3 +19,9 @@ updates:
       prefix: chore
     labels:
       - dependencies
+    ignore:
+      # A new major version of the Companion module API needs a deliberate migration of the module code
+      - dependency-name: '@companion-module/base'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@companion-module/tools'
+        update-types: ['version-update:semver-major']
